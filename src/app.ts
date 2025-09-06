@@ -10,6 +10,7 @@ import {
   startCacheCleanup,
 } from "./services/cache";
 import { getUserById } from "./services/mockData";
+import { addJob, getQueueStats, startQueueCleanup } from "./services/queue";
 import {
   getRateLimitStats,
   startRateLimitCleanup,
@@ -27,6 +28,7 @@ const createApp = (): Application => {
   // Start background tasks
   startCacheCleanup();
   startRateLimitCleanup();
+  startQueueCleanup();
 
   return app;
 };
@@ -100,6 +102,7 @@ const setupRoutes = (app: Application): void => {
           "GET /api/cache-status - Get cache statistics",
           "DELETE /api/cache - Clear cache",
           "GET /api/rate-limit-status - Get rate limit statistics",
+          "GET /api/queue-status - Get queue statistics",
         ],
       },
       "API information"
@@ -112,7 +115,7 @@ const setupRoutes = (app: Application): void => {
     ResponseHelper.success(res, stats, "Cache statistics retrieved");
   });
 
-  // Get user by ID endpoint with caching
+  // Get user by ID endpoint with caching and async processing
   app.get("/api/users/:id", async (req: Request, res: Response) => {
     try {
       const userId = parseInt(req.params["id"] || "0", 10);
@@ -135,23 +138,38 @@ const setupRoutes = (app: Application): void => {
         return;
       }
 
-      // If not in cache, fetch from database
-      logInfo(`User ${userId} not in cache, fetching from database`);
-      const user = await getUserById(userId);
+      // If not in cache, process through queue
+      logInfo(`User ${userId} not in cache, processing through queue`);
 
-      if (!user) {
-        ResponseHelper.notFound(res, `User with ID ${userId} not found`);
-        return;
-      }
+      const user = await addJob(userId, async (job) => {
+        logInfo(
+          `Processing database request for user ${job.userId} (job: ${job.id})`
+        );
+        const userData = await getUserById(job.userId);
 
-      // Cache the result
-      setCache(cacheKey, user);
-      logInfo(`User ${userId} cached for future requests`);
+        if (!userData) {
+          throw new Error(`User with ID ${job.userId} not found`);
+        }
 
-      ResponseHelper.success(res, user, "User retrieved from database");
+        // Cache the result
+        setCache(cacheKey, userData);
+        logInfo(`User ${job.userId} cached for future requests`);
+
+        return userData;
+      });
+
+      ResponseHelper.success(
+        res,
+        user,
+        "User retrieved from database via queue"
+      );
     } catch (error) {
       logError("Error retrieving user", error);
-      ResponseHelper.internalError(res, "Failed to retrieve user");
+      if (error instanceof Error && error.message.includes("not found")) {
+        ResponseHelper.notFound(res, error.message);
+      } else {
+        ResponseHelper.internalError(res, "Failed to retrieve user");
+      }
     }
   });
 
@@ -181,6 +199,17 @@ const setupRoutes = (app: Application): void => {
         res,
         "Failed to retrieve rate limit statistics"
       );
+    }
+  });
+
+  // Queue status endpoint
+  app.get("/api/queue-status", (_req: Request, res: Response) => {
+    try {
+      const stats = getQueueStats();
+      ResponseHelper.success(res, stats, "Queue statistics retrieved");
+    } catch (error) {
+      logError("Error retrieving queue stats", error);
+      ResponseHelper.internalError(res, "Failed to retrieve queue statistics");
     }
   });
 
