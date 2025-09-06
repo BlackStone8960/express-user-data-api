@@ -1,6 +1,14 @@
 import cors from "cors";
 import express, { Application, Request, Response } from "express";
 import helmet from "helmet";
+import {
+  clearCache,
+  getCacheStats,
+  getFromCache,
+  setCache,
+  startCacheCleanup,
+} from "./services/cache";
+import { getUserById } from "./services/mockData";
 import { logError, logInfo } from "./utils/logger";
 import { ResponseHelper } from "./utils/response";
 
@@ -10,6 +18,9 @@ const createApp = (): Application => {
   setupMiddlewares(app);
   setupRoutes(app);
   setupErrorHandling(app);
+
+  // Start cache cleanup background task
+  startCacheCleanup();
 
   return app;
 };
@@ -83,6 +94,70 @@ const setupRoutes = (app: Application): void => {
       },
       "API information"
     );
+  });
+
+  // Cache status endpoint
+  app.get("/api/cache-status", (_req: Request, res: Response) => {
+    const stats = getCacheStats();
+    ResponseHelper.success(res, stats, "Cache statistics retrieved");
+  });
+
+  // Get user by ID endpoint with caching
+  app.get("/api/users/:id", async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(req.params["id"] || "0", 10);
+
+      if (isNaN(userId) || userId <= 0) {
+        ResponseHelper.badRequest(
+          res,
+          "Invalid user ID. Must be a positive integer."
+        );
+        return;
+      }
+
+      const cacheKey = `user:${userId}`;
+
+      // Try to get from cache first
+      const cachedUser = getFromCache(cacheKey);
+      if (cachedUser) {
+        logInfo(`User ${userId} retrieved from cache`);
+        ResponseHelper.success(res, cachedUser, "User retrieved from cache");
+        return;
+      }
+
+      // If not in cache, fetch from database
+      logInfo(`User ${userId} not in cache, fetching from database`);
+      const user = await getUserById(userId);
+
+      if (!user) {
+        ResponseHelper.notFound(res, `User with ID ${userId} not found`);
+        return;
+      }
+
+      // Cache the result
+      setCache(cacheKey, user);
+      logInfo(`User ${userId} cached for future requests`);
+
+      ResponseHelper.success(res, user, "User retrieved from database");
+    } catch (error) {
+      logError("Error retrieving user", error);
+      ResponseHelper.internalError(res, "Failed to retrieve user");
+    }
+  });
+
+  // Clear cache endpoint
+  app.delete("/api/cache", (_req: Request, res: Response) => {
+    try {
+      clearCache();
+      ResponseHelper.success(
+        res,
+        { message: "Cache cleared successfully" },
+        "Cache cleared"
+      );
+    } catch (error) {
+      logError("Error clearing cache", error);
+      ResponseHelper.internalError(res, "Failed to clear cache");
+    }
   });
 
   // 404 handler for undefined routes
