@@ -1,6 +1,7 @@
 import cors from "cors";
 import express, { Application, Request, Response } from "express";
 import helmet from "helmet";
+import { rateLimitMiddleware } from "./middleware/rateLimit";
 import {
   clearCache,
   getCacheStats,
@@ -9,6 +10,10 @@ import {
   startCacheCleanup,
 } from "./services/cache";
 import { getUserById } from "./services/mockData";
+import {
+  getRateLimitStats,
+  startRateLimitCleanup,
+} from "./services/rateLimiter";
 import { logError, logInfo } from "./utils/logger";
 import { ResponseHelper } from "./utils/response";
 
@@ -19,8 +24,9 @@ const createApp = (): Application => {
   setupRoutes(app);
   setupErrorHandling(app);
 
-  // Start cache cleanup background task
+  // Start background tasks
   startCacheCleanup();
+  startRateLimitCleanup();
 
   return app;
 };
@@ -42,6 +48,9 @@ const setupMiddlewares = (app: Application): void => {
   // Body parsing middleware
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+  // Rate limiting middleware (applied to all routes)
+  app.use(rateLimitMiddleware);
 
   // Request logging middleware
   app.use((req: Request, res: Response, next) => {
@@ -90,6 +99,7 @@ const setupRoutes = (app: Application): void => {
           "POST /api/users - Create new user",
           "GET /api/cache-status - Get cache statistics",
           "DELETE /api/cache - Clear cache",
+          "GET /api/rate-limit-status - Get rate limit statistics",
         ],
       },
       "API information"
@@ -157,6 +167,20 @@ const setupRoutes = (app: Application): void => {
     } catch (error) {
       logError("Error clearing cache", error);
       ResponseHelper.internalError(res, "Failed to clear cache");
+    }
+  });
+
+  // Rate limit status endpoint
+  app.get("/api/rate-limit-status", (_req: Request, res: Response) => {
+    try {
+      const stats = getRateLimitStats();
+      ResponseHelper.success(res, stats, "Rate limit statistics retrieved");
+    } catch (error) {
+      logError("Error retrieving rate limit stats", error);
+      ResponseHelper.internalError(
+        res,
+        "Failed to retrieve rate limit statistics"
+      );
     }
   });
 
