@@ -4,12 +4,13 @@ import helmet from "helmet";
 import { rateLimitMiddleware } from "./middleware/rateLimit";
 import {
   clearCache,
+  deleteFromCache,
   getCacheStats,
   getFromCache,
   setCache,
   startCacheCleanup,
 } from "./services/cache";
-import { getUserById } from "./services/mockData";
+import { createUser, getUserById } from "./services/mockData";
 import { addJob, getQueueStats, startQueueCleanup } from "./services/queue";
 import {
   getRateLimitStats,
@@ -101,6 +102,7 @@ const setupRoutes = (app: Application): void => {
           "POST /api/users - Create new user",
           "GET /api/cache-status - Get cache statistics",
           "DELETE /api/cache - Clear cache",
+          "DELETE /api/cache/:key - Delete specific cache entry",
           "GET /api/rate-limit-status - Get rate limit statistics",
           "GET /api/queue-status - Get queue statistics",
         ],
@@ -188,6 +190,33 @@ const setupRoutes = (app: Application): void => {
     }
   });
 
+  // Delete specific cache entry endpoint
+  app.delete("/api/cache/:key", (req: Request, res: Response) => {
+    try {
+      const cacheKey = req.params["key"];
+
+      if (!cacheKey) {
+        ResponseHelper.badRequest(res, "Cache key is required");
+        return;
+      }
+
+      const deleted = deleteFromCache(cacheKey);
+
+      if (deleted) {
+        ResponseHelper.success(
+          res,
+          { message: `Cache entry '${cacheKey}' deleted successfully` },
+          "Cache entry deleted"
+        );
+      } else {
+        ResponseHelper.notFound(res, `Cache entry '${cacheKey}' not found`);
+      }
+    } catch (error) {
+      logError("Error deleting cache entry", error);
+      ResponseHelper.internalError(res, "Failed to delete cache entry");
+    }
+  });
+
   // Rate limit status endpoint
   app.get("/api/rate-limit-status", (_req: Request, res: Response) => {
     try {
@@ -210,6 +239,52 @@ const setupRoutes = (app: Application): void => {
     } catch (error) {
       logError("Error retrieving queue stats", error);
       ResponseHelper.internalError(res, "Failed to retrieve queue statistics");
+    }
+  });
+
+  // Create user endpoint
+  app.post("/api/users", async (req: Request, res: Response) => {
+    try {
+      const { name, email } = req.body;
+
+      // Validate required fields
+      if (!name || !email) {
+        ResponseHelper.badRequest(res, "Name and email are required fields");
+        return;
+      }
+
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        ResponseHelper.badRequest(res, "Invalid email format");
+        return;
+      }
+
+      // Validate name length
+      if (name.length < 2 || name.length > 100) {
+        ResponseHelper.badRequest(
+          res,
+          "Name must be between 2 and 100 characters"
+        );
+        return;
+      }
+
+      logInfo(`Creating new user: ${name} (${email})`);
+
+      const newUser = await createUser({
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+      });
+
+      // Cache the new user
+      const cacheKey = `user:${newUser.id}`;
+      setCache(cacheKey, newUser);
+      logInfo(`New user ${newUser.id} cached`);
+
+      ResponseHelper.success(res, newUser, "User created successfully", 201);
+    } catch (error) {
+      logError("Error creating user", error);
+      ResponseHelper.internalError(res, "Failed to create user");
     }
   });
 
