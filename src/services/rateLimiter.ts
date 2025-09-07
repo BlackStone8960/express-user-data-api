@@ -16,9 +16,9 @@ interface RateLimitConfig {
 // Rate limit configuration
 const RATE_LIMIT_CONFIG: RateLimitConfig = {
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 10, // 10 requests per minute
+  maxRequests: 100, // 100 requests per minute (increased for testing)
   burstWindowMs: 10 * 1000, // 10 seconds
-  maxBurstRequests: 5, // 5 requests per 10 seconds
+  maxBurstRequests: 20, // 20 requests per 10 seconds (increased for testing)
 };
 
 // Global rate limit storage (in production, this would be Redis or similar)
